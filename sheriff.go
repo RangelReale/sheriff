@@ -83,57 +83,60 @@ func Marshal(options *Options, data interface{}) (interface{}, error) {
 		// if there is an anonymous field which is a struct
 		// we want the childs exposed at the toplevel to be
 		// consistent with the embedded json marshaller
-		if val.Kind() == reflect.Ptr {
+		if val.Kind() == reflect.Ptr && !val.IsNil() {
 			val = val.Elem()
 		}
 
-		// we can skip the group checkif if the field is a composition field
-		isEmbeddedField := field.Anonymous && val.Kind() == reflect.Struct
-		if !isEmbeddedField {
-			if checkGroups {
-				groups := strings.Split(field.Tag.Get("groups"), ",")
+		if val.CanInterface() {
 
-				shouldShow := listContains(groups, options.Groups)
-				if !shouldShow || len(groups) == 0 {
-					continue
+			// we can skip the group checkif if the field is a composition field
+			isEmbeddedField := field.Anonymous && val.Kind() == reflect.Struct
+			if !isEmbeddedField {
+				if checkGroups {
+					groups := strings.Split(field.Tag.Get("groups"), ",")
+
+					shouldShow := listContains(groups, options.Groups)
+					if !shouldShow || len(groups) == 0 {
+						continue
+					}
+				}
+
+				if since := field.Tag.Get("since"); since != "" {
+					sinceVersion, err := version.NewVersion(since)
+					if err != nil {
+						return nil, err
+					}
+					if options.ApiVersion.LessThan(sinceVersion) {
+						continue
+					}
+				}
+
+				if until := field.Tag.Get("until"); until != "" {
+					untilVersion, err := version.NewVersion(until)
+					if err != nil {
+						return nil, err
+					}
+					if options.ApiVersion.GreaterThan(untilVersion) {
+						continue
+					}
 				}
 			}
 
-			if since := field.Tag.Get("since"); since != "" {
-				sinceVersion, err := version.NewVersion(since)
-				if err != nil {
-					return nil, err
-				}
-				if options.ApiVersion.LessThan(sinceVersion) {
-					continue
-				}
+			v, err := marshalValue(options, val)
+			if err != nil {
+				return nil, err
 			}
 
-			if until := field.Tag.Get("until"); until != "" {
-				untilVersion, err := version.NewVersion(until)
-				if err != nil {
-					return nil, err
+			// when a composition field we want to bring the child
+			// nodes to the top
+			nestedVal, ok := v.(map[string]interface{})
+			if isEmbeddedField && ok {
+				for key, value := range nestedVal {
+					dest[key] = value
 				}
-				if options.ApiVersion.GreaterThan(untilVersion) {
-					continue
-				}
+			} else {
+				dest[jsonTag] = v
 			}
-		}
-
-		v, err := marshalValue(options, val)
-		if err != nil {
-			return nil, err
-		}
-
-		// when a composition field we want to bring the child
-		// nodes to the top
-		nestedVal, ok := v.(map[string]interface{})
-		if isEmbeddedField && ok {
-			for key, value := range nestedVal {
-				dest[key] = value
-			}
-		} else {
-			dest[jsonTag] = v
 		}
 	}
 
@@ -156,7 +159,7 @@ func marshalValue(options *Options, v reflect.Value) (interface{}, error) {
 	}
 	k := v.Kind()
 
-	if k == reflect.Ptr {
+	if k == reflect.Ptr && !v.IsNil() {
 		v = v.Elem()
 		val = v.Interface()
 		k = v.Kind()
